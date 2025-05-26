@@ -20,8 +20,6 @@ model_tag="TinyLlama_v1.1/pile-LlamaTokenizerFast-32k_seed42/checkpoint-5000"
 stride=512
 attn_chunk_size=128
 interval=512
-attn_layer_interval=1
-ignore_attn_layer='No'
 num_gpus=8
 ablation='No'
 
@@ -42,8 +40,6 @@ process_batch() {
             --stride ${stride} \
             --attn_chunk_size ${attn_chunk_size} \
             --interval ${interval} \
-            --attn_layer_interval ${attn_layer_interval} \
-            --ignore_attn_layer ${ignore_attn_layer} \
             --num_shards ${num_gpus} \
             --ablation ${ablation} \
             --part_idx ${i} > ${outputs_dir}/log${i}.txt 2>&1 &
