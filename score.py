@@ -21,9 +21,9 @@ def parse_args():
     parser.add_argument("--chunked_data_path", type=str, default="/public/zhangjiajun/huggingface/datasets/monology/pile-LlamaTokenizerFast-32k-truncated")
     parser.add_argument("--model_path", type=str, default="/public/zhangjiajun/jhchen/storage/LongDepend/outputs/LLM/TinyLlama/TinyLlama_v1.1/pile-LlamaTokenizerFast-32k_seed42/checkpoint-5000")
     parser.add_argument("--model_tag", type=str, default="TinyLlama_v1.1/pile-LlamaTokenizerFast-32k_seed42/checkpoint-5000")
-    parser.add_argument("--stride", type=int, required=True)
-    parser.add_argument("--attn_chunk_size", type=int, required=True)
-    parser.add_argument("--interval", type=int, required=True)
+    parser.add_argument("--attn_chunk_size", type=int, default=128)
+    parser.add_argument("--d_afs", type=int, default=4)
+    parser.add_argument("--d_cds", type=int, default=4)
     parser.add_argument("--num_shards", type=int, default=8)
     parser.add_argument("--part_idx", type=int, default=0, choices=[0, 1, 2, 3, 4, 5, 6, 7])
     parser.add_argument("--test", action="store_true")
@@ -35,6 +35,8 @@ def parse_args():
 def main(args):
     chunked_datasets = load_from_disk(args.chunked_data_path)['train']
     outputs_dir = f"{args.chunked_data_path}/{args.model_tag}/stride{args.stride}-chunk{args.attn_chunk_size}-interval{args.interval}"
+    args.interval = args.attn_chunk_size * args.d_afs
+    args.stride = args.attn_chunk_size * args.d_cds
     if args.ablation != 'No':
         outputs_dir = outputs_dir + f"-{args.ablation}"
     if args.test:

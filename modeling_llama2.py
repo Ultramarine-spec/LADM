@@ -360,8 +360,8 @@ class LlamaAttention(nn.Module):
         # start jhchen
         self.chunk_size = config.attn_chunk_size
         self.stride = config.stride
-        self.keep_at_start = 128
-        self.interval = [x for x in range(config.interval, 32768 + config.interval, config.interval)]
+        self.keep_at_start = config.attn_chunk_size
+        self.interval = config.interval
         self.ablation = config.ablation
         # end jhchen
 
@@ -535,8 +535,8 @@ class LlamaFlashAttention2(LlamaAttention):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
         # import pdb; pdb.set_trace()
-        all_my_attn = []
-        for start_idx in range(q_len - self.chunk_size, self.keep_at_start + 4 * min(self.interval), -self.stride):
+        all_afs = []
+        for start_idx in range(q_len - self.chunk_size, self.keep_at_start + 4 * self.interval, -self.stride):
             end_idx = min(start_idx + self.chunk_size, q_len)
             context_len_ratio = start_idx / q_len
             part_attn_weights = torch.matmul(query_states[:, :, start_idx:end_idx, :], key_states[:, :, :start_idx, :].transpose(2, 3)) / math.sqrt(self.head_dim) # bs, num_heads, chunk_size, start_idx
@@ -544,26 +544,27 @@ class LlamaFlashAttention2(LlamaAttention):
             part_attn_weights = nn.functional.softmax(part_attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype) # bs, num_heads, chunk_size, start_idx
             part_attn_weights = part_attn_weights.sum(dim=2).mean(dim=1) # bs, start_idx
             
-            my_attn = []
-            for interval in self.interval:
+            all_pfs = []
+            for interval in (self.interval, q_len + self.interval, self.interval):
                 if start_idx - interval < self.keep_at_start:
                     # raise ValueError(f"start_idx - interval < self.keep_at_start")
                     break
-                my_attn.append(part_attn_weights[:, start_idx-interval:end_idx-interval].sum(dim=-1))
+                pfs = part_attn_weights[:, start_idx-interval:end_idx-interval].sum(dim=-1)
+                all_pfs.append(pfs)
 
-            my_attn = torch.stack(my_attn, dim=-1) # bs, interval_num
-            my_attn_std = my_attn.std(dim=1) # bs
+            all_pfs = torch.stack(all_pfs, dim=-1) # bs, interval_num
+            all_pfs_std = all_pfs.std(dim=1) # bs
             if self.ablation != 'no_len_weight':
-                my_attn = my_attn * (torch.tensor(self.interval[:my_attn.shape[1]], device=my_attn.device) / q_len) # bs, interval_num
-            my_attn = my_attn.sum(dim=1) # bs
+                all_pfs = all_pfs * (torch.tensor(self.interval[:all_pfs.shape[1]], device=all_pfs.device) / q_len) # bs, interval_num
+            afs = all_pfs.sum(dim=1) # bs
             if self.ablation != 'no_std':
-                my_attn = my_attn * my_attn_std # bs
+                afs = afs * all_pfs_std # bs
             if self.ablation != 'no_len_weight':
-                my_attn = my_attn * context_len_ratio # bs
-            all_my_attn.append(my_attn)
+                afs = afs * context_len_ratio # bs
+            all_afs.append(afs)
             # if torch.isinf(my_attn).any():
             #     import pdb; pdb.set_trace()
-        avg_my_attn = torch.stack(all_my_attn, dim=1).mean(dim=1) # bs
+        cds = torch.stack(all_afs, dim=1).mean(dim=1) # bs
         # end jhchen
 
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
@@ -620,7 +621,7 @@ class LlamaFlashAttention2(LlamaAttention):
             attn_weights = None
 
         # start jhchen
-        return attn_output, attn_weights, past_key_value, avg_my_attn
+        return attn_output, attn_weights, past_key_value, cds
         # end jhchen
 
 
@@ -780,7 +781,9 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value, avg_my_attn = self.self_attn(
+        # start jhchen
+        hidden_states, self_attn_weights, present_key_value, cds = self.self_attn(
+        # end jhchen
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -808,7 +811,7 @@ class LlamaDecoderLayer(nn.Module):
             outputs += (present_key_value,)
         
         # start jhchen
-        outputs += (avg_my_attn,)
+        outputs += (cds,)
         # end jhchen
 
         return outputs
